@@ -1,4 +1,8 @@
-# Added Nmap Support
+# Modified on 08.20.2019
+
+Added Nmap smb-protocols.nse support
+
+# Original README
 
 nmapdb parses nmap's XML output files and inserts them into an SQLite database.
 
