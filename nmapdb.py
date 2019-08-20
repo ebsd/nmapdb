@@ -36,6 +36,13 @@ def usage(name):
 
     return
 
+def dict_factory(cursor, row):
+    d = {}
+    for idx,col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+
 def main(argv, environ):
     global vflag
     nodb_flag = false
@@ -180,11 +187,21 @@ def main(argv, environ):
 
                 if id == "whois":
                     whois_str = script.getAttribute("output")
+
                 else:
                     whois_str = ""
+                # nmap smb plugin support
+                if id == "smb-protocols":
+                    smb_protocols = script.getAttribute("output")
+                else:
+                    smb_protocols = ""
+
+
+
 
             except:
                 whois_str = ""
+                smb_protocols = ""
 
             myprint("================================================================")
 
@@ -200,6 +217,7 @@ def main(argv, environ):
             myprint("[hosts] state:\t\t%s" % (state))
             myprint("[hosts] mac_vendor:\t%s" % (mac_vendor))
             myprint("[hosts] whois:\n")
+            myprint("[hosts] smb_protocols:\t%s" % (smb_protocols))
             myprint("%s\n" % (whois_str))
 
             if nodb_flag == false:
@@ -208,8 +226,49 @@ def main(argv, environ):
                             (ip, mac, hostname, protocol, os_name, os_family, os_accuracy,
                             os_gen, timestamp, state, mac_vendor, whois_str))
                 except sqlite.IntegrityError, msg:
-                    print "%s: warning: %s: table hosts: ip: %s\n" % (argv[0], msg, ip)
-                    continue
+                    #print "%s: warning: %s: table hosts: ip: %s\n" % (argv[0], msg, ip)
+                    #continue
+                    cursor.execute("SELECT * FROM hosts WHERE ip = '%s'" % ip )
+                    db = dict_factory(cursor, cursor.fetchone())
+                    if not (  db['mac']        == mac
+                          and db['hostname']   == hostname
+                          and db['protocol']   == protocol
+                          and db['os_name']    == os_name
+                          and db['os_family']  == os_family
+                          and db['os_gen']     == os_gen
+                          and db['state']      == state
+                          and db['mac_vendor'] == mac_vendor
+                          and db['whois']      == whois_str):
+                        # So we already have an entry. If theres no new information we continue to ports
+                        # If there's a bunch of new entries we'll ask the user what to do
+                        print "[hosts] Name:        'Old' --> 'New'"
+                        print("[hosts] mac:         '"+db['mac']+"' --> '%s'" % mac)
+                        print("[hosts] hostname:    '"+db['hostname']+"' --> '%s'" % hostname)
+                        print("[hosts] protocol:    '"+db['protocol']+"' --> '%s'" % protocol)
+                        print("[hosts] os_name:     '"+db['os_name']+"' --> '%s'" % os_name)
+                        print("[hosts] os_family:   '"+db['os_family']+"' --> '%s'" % os_family)
+                        print("[hosts] os_accuracy: '"+str(db['os_accuracy'])+"' --> '%s'" % os_accuracy)
+                        print("[hosts] os_gen:      '"+db['os_gen']+"' --> '%s'" % os_gen)
+                        print("[hosts] timestamp:   '"+str(db['last_update'])+"' --> '%s'" % timestamp)
+                        print("[hosts] state:       '"+db['state']+"' --> '%s'" % state)
+                        print("[hosts] mac_vendor:  '"+db['mac_vendor']+" --> '%s'" % mac_vendor)
+                        print("[hosts] whois:       '"+db['whois']+"' --> '%s'" % whois_str)                        
+                        print "=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
+                        print "[hosts] Update entry? y/n"
+                        user_input = sys.stdin.readline().strip()[:1]
+                        if user_input == 'y':
+                            myprint("[hosts] updating %s entry" % ip)
+                            sql = ("UPDATE hosts SET mac='%s', hostname='%s', protocol='%s', os_name='%s', os_family='%s', os_accuracy='%s', os_gen='%s', last_update='%s', state='%s', mac_vendor='%s', whois='%s' WHERE ip = '%s'" %
+                  (mac,hostname,protocol,os_name,os_family,os_accuracy,os_gen,timestamp,state,mac_vendor,whois_str, ip ))
+                            cursor.execute(sql)
+
+                        else:
+                            myprint("[hosts] Skipping %s entry" % ip)
+                            continue
+
+
+
+
                 except:
                     print "%s: unknown exception during insert into table hosts\n" % (argv[0])
                     continue
@@ -269,17 +328,119 @@ def main(argv, environ):
                     myprint("\t[ports] info:\n")
                     myprint("%s\n" % (info_str))
 
+
+                # nmap smb plugin support
+                if smb_protocols:
+                    try:
+                        hostscript = host.getElementsByTagName("hostscript")[0]
+                        script = hostscript.getElementsByTagName("script")[0]
+                        table = script.getElementsByTagName("table")[0]
+                        elems = table.getElementsByTagName("elem")
+                        myprint("%s" % hostscript.firstChild.nodeValue)
+                    except:
+                        print "%s: host %s has no hostscript\n" % (argv[0], ip) 
+                        continue
+
+                    smb1="disabled"
+                    smb2="disabled"
+                    smb3="disabled"
+                    for elem in elems:
+                        smb_version = elem.firstChild.nodeValue
+                        myprint("Debug smb_version : %s" % smb_version)
+                        if "SMBv1" in smb_version:
+                            smb1="enabled"
+                        if "2." in smb_version:
+                            smb2="enabled"
+                        if "3." in smb_version:
+                            smb3="enabled"
+
+                    myprint("Debug smb1 : %s" % smb1)
+                    myprint("Debug smb2 : %s" % smb2)
+                    myprint("Debug smb3 : %s" % smb3)
+               # / nmap smb plugin support 
+
+
                 if nodb_flag == false:
                     try:
                         cursor.execute("INSERT INTO ports VALUES (?, ?, ?, ?, ?, ?, ?)", (ip, pn, protocol, port_name, state, service_str, info_str))
-                    except sqlite.IntegrityError, msg:
-                        print "%s: warning: %s: table ports: ip: %s\n" % (argv[0], msg, ip)
-                        continue
+                    except sqlite.IntegrityError, msg: # Si on a une erreur de contrainte d'intgrit
+                        #print "%s: warning: %s: table ports: ip: %s\n" % (argv[0], msg, ip)
+                        #continue
+                        # Support des updates
+                        #cursor.execute("SELECT * FROM ports WHERE ip = '%s' AND port = '%s' and protocol ='%s'" % (ip, pn, protocol) )
+                        #db = dict_factory(cursor, cursor.fetchone())
+
+                        #if info_str != "" and db['info'].find(info_str) <= 0:
+                            #new_info = db['info'] + "\n" + info_str
+                            #myprint("[ports] Appending info %s" % info_str)
+                            #cursor.execute("UPDATE ports SET info=? WHERE ip = ? AND port = ? and protocol =?" , (new_info, ip, pn, protocol))
+
+
+                        #if db['name'] != port_name or db['service'] != service_str or db['state'] != state:
+                            #print '[ports] %s:%s %s exists' % (ip, pn, protocol)
+                            #print "=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
+                            #print "[ports] Name:     'Old' --> 'New'"
+                            #print("[ports] ip:       '"+db['ip']+"' --> '%s'" % ip)
+                            #print("[ports] port:     '"+str(db['port'])+"' --> '%s'" % pn)
+                            #print("[ports] protocol: '"+db['protocol']+"' --> '%s'" % protocol)
+                            #print("[ports] name:     '"+db['name']+"' --> '%s'" % port_name)
+                            #print("[ports] state:    '"+db['state']+"' --> '%s'" % state)
+                            #print("[ports] service:  '"+db['service']+"' --> '%s'" % service_str)
+                            #print "=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
+                            #print "[ports] Update entry? y/n"
+                            #user_input = sys.stdin.readline().strip()[:1]
+                        cursor.execute("UPDATE ports SET name=?, state=?, service=? WHERE ip = ? AND port = ? and protocol = ?",
+                               (port_name, state, service_str, ip, pn, protocol))
                     except:
                         print "%s: unknown exception during insert into table ports\n" % (argv[0])
                         continue
 
                 myprint("\t------------------------------------------------")
+
+                # nmap smb plugin support
+                if smb_protocols:
+                    if nodb_flag == false:
+                        try:
+                            cursor.execute("INSERT INTO smb VALUES (?, ?, ?, ?, ?, ?)", (ip, pn, protocol, smb1, smb2, smb3))
+                        except sqlite.IntegrityError, msg:
+                            #print "%s: warning: %s: table smb: ip: %s\n" % (argv[0], msg, ip)
+                            #continue
+                            #cursor.execute("SELECT * FROM smb WHERE ip = '%s' AND port = '%s' and protocol ='%s'" % (ip, pn, protocol) )
+                            #db = dict_factory(cursor, cursor.fetchone())
+
+                        #if info_str != "" and db['info'].find(info_str) <= 0:
+                            #new_info = db['info'] + "\n" + info_str
+                            #myprint("[ports] Appending info %s" % info_str)
+                            #cursor.execute("UPDATE smb SET smb1=?, smb2=?, smb3=? WHERE ip = ? AND port = ? and protocol =?" , (smb1, smb2, smb3, ip, pn, protocol))
+
+
+                            #if db['name'] != port_name or db['service'] != service_str or db['state'] != state:
+                             #print '[ports] %s:%s %s exists' % (ip, pn, protocol)
+                             #print "=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
+                             #print "[ports] Name:     'Old' --> 'New'"
+                             #print("[ports] ip:       '"+db['ip']+"' --> '%s'" % ip)
+                             #print("[ports] port:     '"+str(db['port'])+"' --> '%s'" % pn)
+                             #print("[ports] protocol: '"+db['protocol']+"' --> '%s'" % protocol)
+                             #print("[ports] name:     '"+db['name']+"' --> '%s'" % port_name)
+                             #print("[ports] state:    '"+db['state']+"' --> '%s'" % state)
+                             #print("[ports] service:  '"+db['service']+"' --> '%s'" % service_str)
+                             #print "=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
+                            #print "[smb] Update entry? y/n"
+                            #user_input = sys.stdin.readline().strip()[:1]
+                            cursor.execute("UPDATE smb SET smb1=?, smb2=?, smb3=? WHERE ip = ? AND port = ? and protocol = ?",
+                                       (smb1, smb2, smb3, ip, pn, protocol))
+                        except:
+                            print "%s: unknown exception during insert into table smb\n" % (argv[0])
+                            print "ip : %s" % (ip)
+                            print "pn : %s" % pn
+                            print "protocol : %s" % protocol
+                            print "smb1 : %s" % smb1
+                            print "smb2 : %s" % smb2
+                            print "smb3 : %s" % smb3
+                            continue
+
+                    myprint("\t------------------------------------------------")
+
 
             myprint("================================================================")
 
